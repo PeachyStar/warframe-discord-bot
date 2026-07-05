@@ -75,7 +75,11 @@ async def monitor():
     last_bounty_notified = None
     last_void_cascade_id_notified = None
 
+    last_bounty_logged = None
+    last_omnia_logged = None
+
     while not client.is_closed():
+        logs = []
         try:
             # Fetch data
             bounty_data = await fetch_bounty_data()
@@ -83,11 +87,9 @@ async def monitor():
 
             # Process Steel Path Omnia missions
             has_void_cascade, earliest_voidt6_expiry_ms, cascade_id, cascade_expiry = get_omnia_info(ws_data)
-            if earliest_voidt6_expiry_ms is not None and log_channel:
-                await log_channel.send(f"Next SP Omnia mission expiry: <t:{earliest_voidt6_expiry_ms / 1000:.0f}:R>")
-
-            if has_void_cascade and log_channel:
-                await log_channel.send("There is a Steel Path void cascade!")
+            if earliest_voidt6_expiry_ms and earliest_voidt6_expiry_ms != last_omnia_logged:
+                last_omnia_logged = earliest_voidt6_expiry_ms
+                logs.append(f"Next SP Omnia mission expiry: <t:{earliest_voidt6_expiry_ms / 1000:.0f}:R>")
 
             if (
                     has_void_cascade
@@ -98,7 +100,11 @@ async def monitor():
 
                 embed = discord.Embed(
                     title="There is a Steel Path void cascade!",
-                    description=f"The rift expires: <t:{cascade_expiry / 1000:.0f}:R>",
+                    description=(
+                        f"The rift expires: <t:{cascade_expiry / 1000:.0f}:R>"
+                        if cascade_expiry else
+                        "The rift expiry is unknown."
+                    ),
                     color=discord.Color.from_rgb(227, 195, 54),
                 )
 
@@ -110,8 +116,9 @@ async def monitor():
             # Process bounty cycle
             bounty_expiry_ms = bounty_data["expiry"]
 
-            if log_channel:
-                await log_channel.send(f"Current bounty cycle expires: <t:{bounty_expiry_ms / 1000:.0f}:R>")
+            if bounty_expiry_ms != last_bounty_logged:
+                last_bounty_logged = bounty_expiry_ms
+                logs.append(f"Current bounty cycle expires: <t:{bounty_expiry_ms / 1000:.0f}:R>")
 
             has_credit_bounty = any(
                 CRED_HEX_TEXT in str(value)
@@ -137,32 +144,28 @@ async def monitor():
                 )
 
             # Determine next wake-up time
-            next_expiry_ms = min(
-                bounty_expiry_ms,
-                earliest_voidt6_expiry_ms or float("inf")
-            )
+            valid_expiries = [bounty_expiry_ms]
 
-            sleep_time = (
-                    max(1, next_expiry_ms / 1000 - time.time())
-                    + 5
-            )
+            if earliest_voidt6_expiry_ms is not None:
+                valid_expiries.append(earliest_voidt6_expiry_ms)
 
-            if log_channel:
-                await log_channel.send(
-                    f"Waking up in {sleep_time:.0f} seconds"
-                )
+            next_expiry_ms = min(valid_expiries)
 
-            # Sleep until next refresh
+            sleep_time = ( max(1, next_expiry_ms / 1000 - time.time()) + 5 )
+
+            logs.append(f"Waking up in {sleep_time:.0f} seconds")
+
+            if log_channel and logs:
+                await log_channel.send("\n".join(logs))
+
             await asyncio.sleep(sleep_time)
 
-            if log_channel:
-                await log_channel.send("Cycle refreshed.")
-
         except Exception as e:
-            if log_channel:
-                await log_channel.send(f"Monitor error: {e}")
-
+            logs.append(f"Monitor error: {e}")
+            if log_channel and logs:
+                await log_channel.send("\n".join(logs))
             await asyncio.sleep(60)
+
 
 
 @client.event
