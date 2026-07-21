@@ -19,6 +19,18 @@ VOID_CASCADE_ROLE_ID = int(os.getenv('VOID_CASCADE_ROLE_ID'))
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 
+session = None
+async def fetch_bounty_data():
+    async with session.get(BOUNTY_URL) as response:
+        response.raise_for_status()
+        return await response.json()
+
+
+async def fetch_ws_data():
+    async with session.get(WORLD_STATE_URL) as response:
+        response.raise_for_status()
+        return await response.json()
+
 
 def get_omnia_info(ws_data):
     now_ms = int(time.time() * 1000)
@@ -31,14 +43,18 @@ def get_omnia_info(ws_data):
     for mission in ws_data.get("ActiveMissions", []):
         if mission.get("Modifier") != "VoidT6":
             continue
+        #print("VoidT6")
 
         if mission.get("Hard") is not True:
             continue
+        #print("Hard")
 
         expiry_ms = int(mission["Expiry"]["$date"]["$numberLong"])
 
         if expiry_ms <= now_ms:
+            #print("expired")
             continue
+        #print("not expired")
 
         if mission.get("MissionType") == "MT_VOID_CASCADE":
             print("void cascade")
@@ -50,20 +66,6 @@ def get_omnia_info(ws_data):
             earliest_expiry = expiry_ms
 
     return has_void_cascade, earliest_expiry, cascade_id, cascade_expiry
-
-
-async def fetch_bounty_data():
-    async with aiohttp.ClientSession() as session:
-        async with session.get(BOUNTY_URL) as response:
-            response.raise_for_status()
-            return await response.json()
-
-
-async def fetch_ws_data():
-    async with aiohttp.ClientSession() as session:
-        async with session.get(WORLD_STATE_URL) as response:
-            response.raise_for_status()
-            return await response.json()
 
 
 async def monitor():
@@ -151,7 +153,16 @@ async def monitor():
 
             next_expiry_ms = min(valid_expiries)
 
-            sleep_time = ( max(1, next_expiry_ms / 1000 - time.time()) + 5 )
+            seconds_until_expiry = next_expiry_ms / 1000 - time.time()
+
+            sleep_time = max(
+                1,
+                int(seconds_until_expiry) + 5
+            )
+
+            if earliest_voidt6_expiry_ms is None:
+                logs.append("No omnia found")
+                sleep_time = 60
 
             logs.append(f"Waking up in {sleep_time:.0f} seconds")
 
@@ -167,11 +178,16 @@ async def monitor():
             await asyncio.sleep(60)
 
 
-
 @client.event
 async def on_ready():
     print("Bot online!")
     log_channel = client.get_channel(LOG_CHANNEL_ID)
+
+    global session
+
+    if session is None:
+        session = aiohttp.ClientSession()
+
     if log_channel:
         await log_channel.send(
             f"{client.user} is online!"
@@ -183,6 +199,10 @@ async def on_ready():
             monitor()
         )
 
+
+async def shutdown():
+    if session is not None:
+        await session.close()
 
 # get bot token from .env and run client
 client.run(os.getenv('TOKEN'))
